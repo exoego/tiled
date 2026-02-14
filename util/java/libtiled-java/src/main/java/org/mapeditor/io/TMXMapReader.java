@@ -49,6 +49,8 @@ import java.util.TreeMap;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
+import com.github.luben.zstd.ZstdInputStream;
+
 import javax.imageio.ImageIO;
 import java.util.Base64;
 
@@ -65,11 +67,26 @@ import org.mapeditor.core.Map;
 import org.mapeditor.core.MapObject;
 import org.mapeditor.core.ObjectGroup;
 import org.mapeditor.core.Point;
+import org.mapeditor.core.Polygon;
+import org.mapeditor.core.Polyline;
+import org.mapeditor.core.Ellipse;
+import org.mapeditor.core.Animation;
+import org.mapeditor.core.Frame;
+import org.mapeditor.core.Sprite;
 import org.mapeditor.core.Properties;
+import org.mapeditor.core.Property;
 import org.mapeditor.core.Tile;
 import org.mapeditor.core.TileLayer;
+import org.mapeditor.core.Grid;
+import org.mapeditor.core.ImageData;
+import org.mapeditor.core.Orientation;
 import org.mapeditor.core.TileOffset;
 import org.mapeditor.core.TileSet;
+import org.mapeditor.core.WangColor;
+import org.mapeditor.core.WangCornerColor;
+import org.mapeditor.core.WangEdgeColor;
+import org.mapeditor.core.WangSet;
+import org.mapeditor.core.WangSets;
 import org.mapeditor.util.BasicTileCutter;
 import org.mapeditor.util.ImageHelper;
 import org.mapeditor.util.StreamHelper;
@@ -118,7 +135,8 @@ public class TMXMapReader {
     public TMXMapReader() throws JAXBException {
         unmarshaller = JAXBContext.newInstance(
             Map.class, TileSet.class, Tile.class,
-            AnimatedTile.class, ObjectGroup.class, ImageLayer.class).createUnmarshaller();
+            AnimatedTile.class, ObjectGroup.class, ImageLayer.class,
+            org.mapeditor.core.Text.class).createUnmarshaller();
     }
 
     String getError() {
@@ -170,6 +188,14 @@ public class TMXMapReader {
         } else {
             return def;
         }
+    }
+
+    private static Integer getOptionalIntAttribute(Node node, String attribname) {
+        final String attr = getAttributeValue(node, attribname);
+        if (attr == null || attr.isEmpty()) {
+            return null;
+        }
+        return Integer.parseInt(attr);
     }
 
     private <T> T unmarshalClass(Node node, Class<T> type) throws JAXBException {
@@ -305,6 +331,40 @@ public class TMXMapReader {
         final int tileSpacing = getAttribute(t, "spacing", 0);
         final int tileMargin = getAttribute(t, "margin", 0);
 
+        final String objectAlignment = getAttributeValue(t, "objectalignment");
+        if (objectAlignment != null) {
+            set.setObjectalignment(objectAlignment);
+        }
+
+        final String tileRenderSize = getAttributeValue(t, "tilerendersize");
+        if (tileRenderSize != null) {
+            set.setTilerendersize(tileRenderSize);
+        }
+
+        final String fillMode = getAttributeValue(t, "fillmode");
+        if (fillMode != null) {
+            set.setFillmode(fillMode);
+        }
+
+        String tilesetClass = getAttributeValue(t, "class");
+        if (tilesetClass != null) {
+            set.setClassName(tilesetClass);
+        }
+
+        final String bgColor = getAttributeValue(t, "backgroundcolor");
+        if (bgColor != null) {
+            set.setBackgroundcolor(bgColor);
+        }
+
+        final String tilecountStr = getAttributeValue(t, "tilecount");
+        if (tilecountStr != null) {
+            set.setTilecount(Integer.valueOf(tilecountStr));
+        }
+        final int columns = getAttribute(t, "columns", 0);
+        if (columns > 0) {
+            set.setColumns(columns);
+        }
+
         boolean hasTilesetImage = false;
         NodeList children = t.getChildNodes();
 
@@ -346,6 +406,21 @@ public class TMXMapReader {
 
                     set.importTileBitmap(sourcePath, new BasicTileCutter(
                         tileWidth, tileHeight, tileSpacing, tileMargin));
+
+                    ImageData imgData = new ImageData();
+                    imgData.setSource(imgSource);
+                    String imgWidthStr = getAttributeValue(child, "width");
+                    String imgHeightStr = getAttributeValue(child, "height");
+                    if (imgWidthStr != null) {
+                        imgData.setWidth(Integer.valueOf(imgWidthStr));
+                    }
+                    if (imgHeightStr != null) {
+                        imgData.setHeight(Integer.valueOf(imgHeightStr));
+                    }
+                    if (transStr != null) {
+                        imgData.setTrans(transStr);
+                    }
+                    set.setImageData(imgData);
                 }
             } else if (child.getNodeName().equalsIgnoreCase("tile")) {
                 Tile tile = unmarshalTile(set, child, xmlPath);
@@ -362,6 +437,77 @@ public class TMXMapReader {
                 tileoffset.setX(Integer.valueOf(getAttributeValue(child, "x")));
                 tileoffset.setY(Integer.valueOf(getAttributeValue(child, "y")));
                 set.setTileoffset(tileoffset);
+            } else if (child.getNodeName().equalsIgnoreCase("transformations")) {
+                org.mapeditor.core.Transformations trans = new org.mapeditor.core.Transformations();
+                String hflip = getAttributeValue(child, "hflip");
+                if (hflip != null) trans.setHflip("1".equals(hflip) || "true".equalsIgnoreCase(hflip));
+                String vflip = getAttributeValue(child, "vflip");
+                if (vflip != null) trans.setVflip("1".equals(vflip) || "true".equalsIgnoreCase(vflip));
+                String rotate = getAttributeValue(child, "rotate");
+                if (rotate != null) trans.setRotate("1".equals(rotate) || "true".equalsIgnoreCase(rotate));
+                String prefUntrans = getAttributeValue(child, "preferuntransformed");
+                if (prefUntrans != null) trans.setPreferuntransformed("1".equals(prefUntrans) || "true".equalsIgnoreCase(prefUntrans));
+                set.setTransformations(trans);
+            } else if (child.getNodeName().equalsIgnoreCase("properties")) {
+                Properties tilesetProps = new Properties();
+                readProperties(child.getChildNodes(), tilesetProps);
+                set.setProperties(tilesetProps);
+            } else if (child.getNodeName().equalsIgnoreCase("grid")) {
+                Grid grid = new Grid();
+                String gridOrientation = getAttributeValue(child, "orientation");
+                if (gridOrientation != null) {
+                    grid.setOrientation(Orientation.fromValue(gridOrientation));
+                }
+                int gridWidth = getAttribute(child, "width", 0);
+                if (gridWidth > 0) {
+                    grid.setWidth(gridWidth);
+                }
+                int gridHeight = getAttribute(child, "height", 0);
+                if (gridHeight > 0) {
+                    grid.setHeight(gridHeight);
+                }
+                set.setGrid(grid);
+            } else if (child.getNodeName().equalsIgnoreCase("wangsets")) {
+                WangSets wangSets = unmarshalClass(child, WangSets.class);
+                if (wangSets != null) {
+                    for (WangSet ws : wangSets.getWangset()) {
+                        // Convert old-style wangcornercolor to unified wangcolor
+                        for (WangCornerColor wcc : ws.getWangcornercolor()) {
+                            WangColor wc = new WangColor();
+                            wc.setName(wcc.getName());
+                            wc.setColor(wcc.getColor());
+                            wc.setTile(wcc.getTile());
+                            if (wcc.getProbability() != null) {
+                                wc.setProbability(wcc.getProbability().doubleValue());
+                            }
+                            ws.getWangcolor().add(wc);
+                        }
+                        // Convert old-style wangedgecolor to unified wangcolor
+                        for (WangEdgeColor wec : ws.getWangedgecolor()) {
+                            WangColor wc = new WangColor();
+                            wc.setName(wec.getName());
+                            wc.setColor(wec.getColor());
+                            wc.setTile(wec.getTile());
+                            if (wec.getProbability() != null) {
+                                wc.setProbability(wec.getProbability().doubleValue());
+                            }
+                            ws.getWangcolor().add(wc);
+                        }
+                        // Infer WangSet type from old-style colors if not set
+                        if (ws.getType() == null || ws.getType().isEmpty()) {
+                            boolean hasCorner = !ws.getWangcornercolor().isEmpty();
+                            boolean hasEdge = !ws.getWangedgecolor().isEmpty();
+                            if (hasCorner && !hasEdge) {
+                                ws.setType("corner");
+                            } else if (hasEdge && !hasCorner) {
+                                ws.setType("edge");
+                            } else if (hasCorner && hasEdge) {
+                                ws.setType("mixed");
+                            }
+                        }
+                    }
+                    set.setWangsets(wangSets);
+                }
             }
         }
 
@@ -369,48 +515,87 @@ public class TMXMapReader {
     }
 
     private MapObject readMapObject(Node t) throws Exception {
+        // Step 1: Read template if present
+        final String templatePath = getAttributeValue(t, "template");
+        MapObject templateObj = null;
+        if (templatePath != null && !templatePath.isEmpty()) {
+            templateObj = readTemplateFile(templatePath);
+        }
+
+        // Step 2: Read TMX attributes
         final int id = getAttribute(t, "id", 0);
-        final String name = getAttributeValue(t, "name");
-        final String type = getAttributeValue(t, "type");
-        final String gid = getAttributeValue(t, "gid");
+        final String nameAttr = getAttributeValue(t, "name");
+        String typeAttr = getAttributeValue(t, "class");
+        if (typeAttr == null || typeAttr.isEmpty()) {
+            typeAttr = getAttributeValue(t, "type");
+        }
+        final String gidAttr = getAttributeValue(t, "gid");
         final double x = getDoubleAttribute(t, "x", 0);
         final double y = getDoubleAttribute(t, "y", 0);
-        final double width = getDoubleAttribute(t, "width", 0);
-        final double height = getDoubleAttribute(t, "height", 0);
-        final double rotation = getDoubleAttribute(t, "rotation", 0);
 
+        // Width/height/rotation: use TMX value if present, else template value
+        final String widthStr = getAttributeValue(t, "width");
+        final String heightStr = getAttributeValue(t, "height");
+        final String rotationStr = getAttributeValue(t, "rotation");
+
+        double width = widthStr != null ? Double.parseDouble(widthStr) :
+                       (templateObj != null && templateObj.getWidth() != null ? templateObj.getWidth() : 0);
+        double height = heightStr != null ? Double.parseDouble(heightStr) :
+                        (templateObj != null && templateObj.getHeight() != null ? templateObj.getHeight() : 0);
+        double rotation = rotationStr != null ? Double.parseDouble(rotationStr) :
+                          (templateObj != null ? templateObj.getRotation() : 0);
+
+        // Step 3: Create object with merged values
         MapObject obj = new MapObject(x, y, width, height, rotation);
         obj.setShape(obj.getBounds());
         if (id != 0) {
             obj.setId(id);
         }
+
+        // Name: TMX overrides template
+        String name = nameAttr != null ? nameAttr : (templateObj != null ? templateObj.getName() : null);
         if (name != null) {
             obj.setName(name);
         }
+
+        // Type: TMX overrides template
+        String type = typeAttr != null ? typeAttr : (templateObj != null ? templateObj.getType() : null);
         if (type != null) {
             obj.setType(type);
         }
-        if (gid != null) {
-            long tileId = Long.parseLong(gid);
+
+        // Store template path for round-trip
+        if (templatePath != null) {
+            obj.setTemplate(templatePath);
+        }
+
+        final int visible = getAttribute(t, "visible", 1);
+        obj.setVisible(visible == 1);
+
+        // GID/tile: TMX gid overrides template tile
+        if (gidAttr != null) {
+            long tileId = Long.parseLong(gidAttr);
             if ((tileId & ALL_FLAGS) != 0) {
-                // Read out the flags
-                long flippedHorizontally = tileId & FLIPPED_HORIZONTALLY_FLAG;
-                long flippedVertically = tileId & FLIPPED_VERTICALLY_FLAG;
-                long flippedDiagonally = tileId & FLIPPED_DIAGONALLY_FLAG;
-
-                obj.setFlipHorizontal(flippedHorizontally != 0);
-                obj.setFlipVertical(flippedVertically != 0);
-                obj.setFlipDiagonal(flippedDiagonally != 0);
-
-                // Clear the flags
+                obj.setFlipHorizontal((tileId & FLIPPED_HORIZONTALLY_FLAG) != 0);
+                obj.setFlipVertical((tileId & FLIPPED_VERTICALLY_FLAG) != 0);
+                obj.setFlipDiagonal((tileId & FLIPPED_DIAGONALLY_FLAG) != 0);
                 tileId &= ~(FLIPPED_HORIZONTALLY_FLAG
                         | FLIPPED_VERTICALLY_FLAG
                         | FLIPPED_DIAGONALLY_FLAG);
             }
             Tile tile = getTileForTileGID((int) tileId);
             obj.setTile(tile);
+        } else if (templateObj != null && templateObj.getTile() != null) {
+            Tile templateTile = templateObj.getTile();
+            Tile mapTile = findTileInMapTilesets(templateTile, templateTile.getTileSet());
+            obj.setTile(mapTile != null ? mapTile : templateTile);
+            obj.setFlipHorizontal(templateObj.getFlipHorizontal());
+            obj.setFlipVertical(templateObj.getFlipVertical());
+            obj.setFlipDiagonal(templateObj.getFlipDiagonal());
         }
 
+        // Read child elements from TMX
+        boolean hasShapeChild = false;
         NodeList children = t.getChildNodes();
         for (int i = 0; i < children.getLength(); i++) {
             Node child = children.item(i);
@@ -422,10 +607,14 @@ public class TMXMapReader {
                     }
                     obj.setImageSource(source);
                 }
+                hasShapeChild = true;
                 break;
             } else if ("ellipse".equalsIgnoreCase(child.getNodeName())) {
                 obj.setShape(new Ellipse2D.Double(x, y, width, height));
+                obj.setEllipse(new Ellipse());
+                hasShapeChild = true;
             } else if ("polygon".equalsIgnoreCase(child.getNodeName()) || "polyline".equalsIgnoreCase(child.getNodeName())) {
+                boolean isPolygon = "polygon".equalsIgnoreCase(child.getNodeName());
                 Path2D.Double shape = new Path2D.Double();
                 final String pointsAttribute = getAttributeValue(child, "points");
                 StringTokenizer st = new StringTokenizer(pointsAttribute, ", ");
@@ -440,11 +629,189 @@ public class TMXMapReader {
                         shape.lineTo(x + pointX, y + pointY);
                     }
                 }
-                shape.closePath();
+                if (isPolygon) {
+                    shape.closePath();
+                    Polygon pg = new Polygon();
+                    pg.setPoints(pointsAttribute);
+                    obj.setPolygon(pg);
+                } else {
+                    Polyline pl = new Polyline();
+                    pl.setPoints(pointsAttribute);
+                    obj.setPolyline(pl);
+                }
+                obj.setShape(shape);
+                obj.setBounds((Rectangle2D.Double) shape.getBounds2D());
+                hasShapeChild = true;
+            } else if ("point".equalsIgnoreCase(child.getNodeName())) {
+                obj.setPoint(new Point());
+                hasShapeChild = true;
+            } else if ("text".equalsIgnoreCase(child.getNodeName())) {
+                try {
+                    org.mapeditor.core.Text textObj = unmarshalClass(child, org.mapeditor.core.Text.class);
+                    obj.setText(textObj);
+                } catch (JAXBException e) {
+                    // ignore parse errors for text elements
+                }
+                hasShapeChild = true;
+            } else if ("capsule".equalsIgnoreCase(child.getNodeName())) {
+                obj.setCapsule(new org.mapeditor.core.Capsule());
+                hasShapeChild = true;
+            }
+        }
+
+        // If no shape child in TMX, inherit from template
+        if (!hasShapeChild && templateObj != null) {
+            if (templateObj.getPoint() != null) {
+                obj.setPoint(templateObj.getPoint());
+            } else if (templateObj.getText() != null) {
+                obj.setText(templateObj.getText());
+            } else if (templateObj.getCapsule() != null) {
+                obj.setCapsule(templateObj.getCapsule());
+            } else if (templateObj.getEllipse() != null) {
+                obj.setEllipse(templateObj.getEllipse());
+                obj.setShape(new Ellipse2D.Double(x, y, width, height));
+            } else if (templateObj.getPolygon() != null) {
+                obj.setPolygon(templateObj.getPolygon());
+            } else if (templateObj.getPolyline() != null) {
+                obj.setPolyline(templateObj.getPolyline());
+            }
+        }
+
+        // Properties: merge template as base, TMX overrides
+        Properties tmxProps = new Properties();
+        readProperties(children, tmxProps);
+
+        if (templateObj != null && templateObj.getProperties() != null && !templateObj.getProperties().isEmpty()) {
+            Properties props = new Properties();
+            java.util.Set<String> tmxKeys = new java.util.HashSet<>(tmxProps.keySet());
+            for (Property p : templateObj.getProperties().getProperties()) {
+                if (!tmxKeys.contains(p.getName())) {
+                    props.setProperty(p.getName(), p.getValue(), p.getType(), p.getPropertyTypeName());
+                }
+            }
+            for (Property p : tmxProps.getProperties()) {
+                props.setProperty(p.getName(), p.getValue(), p.getType(), p.getPropertyTypeName());
+            }
+            obj.setProperties(props);
+        } else {
+            obj.setProperties(tmxProps);
+        }
+
+        return obj;
+    }
+
+    private MapObject readTemplateFile(String templatePath) throws Exception {
+        templatePath = replacePathSeparator(templatePath);
+        URL templateUrl = URLHelper.resolve(xmlPath, templatePath);
+
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        try (InputStream in = StreamHelper.openStream(templateUrl)) {
+            Document doc = factory.newDocumentBuilder()
+                .parse(StreamHelper.buffered(in), ".");
+            Node templateNode = doc.getDocumentElement();
+
+            URL xmlPathSave = xmlPath;
+            xmlPath = URLHelper.getParent(templateUrl);
+
+            TileSet templateTileset = null;
+            int templateFirstGid = 1;
+            MapObject templateObject = null;
+
+            NodeList children = templateNode.getChildNodes();
+            for (int i = 0; i < children.getLength(); i++) {
+                Node child = children.item(i);
+                if ("tileset".equalsIgnoreCase(child.getNodeName())) {
+                    templateFirstGid = getAttribute(child, "firstgid", 1);
+                    templateTileset = unmarshalTileset(child);
+                } else if ("object".equalsIgnoreCase(child.getNodeName())) {
+                    templateObject = readTemplateObject(child, templateTileset, templateFirstGid);
+                }
+            }
+
+            xmlPath = xmlPathSave;
+            return templateObject;
+        }
+    }
+
+    private MapObject readTemplateObject(Node t, TileSet templateTileset, int firstGid) throws Exception {
+        final String name = getAttributeValue(t, "name");
+        String type = getAttributeValue(t, "class");
+        if (type == null || type.isEmpty()) {
+            type = getAttributeValue(t, "type");
+        }
+        final String gidStr = getAttributeValue(t, "gid");
+        final double x = getDoubleAttribute(t, "x", 0);
+        final double y = getDoubleAttribute(t, "y", 0);
+        final double width = getDoubleAttribute(t, "width", 0);
+        final double height = getDoubleAttribute(t, "height", 0);
+        final double rotation = getDoubleAttribute(t, "rotation", 0);
+
+        MapObject obj = new MapObject(x, y, width, height, rotation);
+        obj.setShape(obj.getBounds());
+        if (name != null) obj.setName(name);
+        if (type != null) obj.setType(type);
+
+        final int visible = getAttribute(t, "visible", 1);
+        obj.setVisible(visible == 1);
+
+        if (gidStr != null && templateTileset != null) {
+            long tileId = Long.parseLong(gidStr);
+            if ((tileId & ALL_FLAGS) != 0) {
+                obj.setFlipHorizontal((tileId & FLIPPED_HORIZONTALLY_FLAG) != 0);
+                obj.setFlipVertical((tileId & FLIPPED_VERTICALLY_FLAG) != 0);
+                obj.setFlipDiagonal((tileId & FLIPPED_DIAGONALLY_FLAG) != 0);
+                tileId &= ~ALL_FLAGS;
+            }
+            int localId = (int) tileId - firstGid;
+            Tile tile = templateTileset.getTile(localId);
+            obj.setTile(tile);
+        }
+
+        NodeList children = t.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if ("ellipse".equalsIgnoreCase(child.getNodeName())) {
+                obj.setShape(new Ellipse2D.Double(x, y, width, height));
+                obj.setEllipse(new Ellipse());
+            } else if ("polygon".equalsIgnoreCase(child.getNodeName()) || "polyline".equalsIgnoreCase(child.getNodeName())) {
+                boolean isPolygon = "polygon".equalsIgnoreCase(child.getNodeName());
+                Path2D.Double shape = new Path2D.Double();
+                final String pointsAttribute = getAttributeValue(child, "points");
+                StringTokenizer st = new StringTokenizer(pointsAttribute, ", ");
+                boolean firstPoint = true;
+                while (st.hasMoreElements()) {
+                    double pointX = Double.parseDouble(st.nextToken());
+                    double pointY = Double.parseDouble(st.nextToken());
+                    if (firstPoint) {
+                        shape.moveTo(x + pointX, y + pointY);
+                        firstPoint = false;
+                    } else {
+                        shape.lineTo(x + pointX, y + pointY);
+                    }
+                }
+                if (isPolygon) {
+                    shape.closePath();
+                    Polygon pg = new Polygon();
+                    pg.setPoints(pointsAttribute);
+                    obj.setPolygon(pg);
+                } else {
+                    Polyline pl = new Polyline();
+                    pl.setPoints(pointsAttribute);
+                    obj.setPolyline(pl);
+                }
                 obj.setShape(shape);
                 obj.setBounds((Rectangle2D.Double) shape.getBounds2D());
             } else if ("point".equalsIgnoreCase(child.getNodeName())) {
                 obj.setPoint(new Point());
+            } else if ("text".equalsIgnoreCase(child.getNodeName())) {
+                try {
+                    org.mapeditor.core.Text textVal = unmarshalClass(child, org.mapeditor.core.Text.class);
+                    obj.setText(textVal);
+                } catch (JAXBException e) {
+                    // ignore
+                }
+            } else if ("capsule".equalsIgnoreCase(child.getNodeName())) {
+                obj.setCapsule(new org.mapeditor.core.Capsule());
             }
         }
 
@@ -453,6 +820,25 @@ public class TMXMapReader {
 
         obj.setProperties(props);
         return obj;
+    }
+
+    private Tile findTileInMapTilesets(Tile templateTile, TileSet templateTileSet) {
+        if (map == null || tilesetPerFirstGid == null || templateTileSet == null) return null;
+        for (java.util.Map.Entry<Integer, TileSet> entry : tilesetPerFirstGid.entrySet()) {
+            TileSet mapTileSet = entry.getValue();
+            if (tilesetSourcesMatch(templateTileSet, mapTileSet)) {
+                return mapTileSet.getTile(templateTile.getId());
+            }
+        }
+        return null;
+    }
+
+    private boolean tilesetSourcesMatch(TileSet a, TileSet b) {
+        if (a == null || b == null) return false;
+        String sourceA = a.getSource();
+        String sourceB = b.getSource();
+        if (sourceA == null || sourceB == null) return false;
+        return sourceA.equals(sourceB);
     }
 
     /**
@@ -483,7 +869,19 @@ public class TMXMapReader {
                     }
                 }
                 if (value != null) {
-                    props.setProperty(key, value);
+                    final String typeStr = getAttributeValue(child, "type");
+                    final String propertyTypeName = getAttributeValue(child, "propertytype");
+                    if (typeStr != null && !typeStr.isEmpty()) {
+                        try {
+                            org.mapeditor.core.PropertyType type =
+                                org.mapeditor.core.PropertyType.fromValue(typeStr);
+                            props.setProperty(key, value, type, propertyTypeName);
+                        } catch (IllegalArgumentException e) {
+                            props.setProperty(key, value);
+                        }
+                    } else {
+                        props.setProperty(key, value);
+                    }
                 }
             } else if ("properties".equals(child.getNodeName())) {
                 readProperties(child.getChildNodes(), props);
@@ -517,13 +915,59 @@ public class TMXMapReader {
 
         tile.setTileSet(set);
 
+        // class/type fallback: Tiled 1.9 renamed "type" to "class", 1.10 reverted
+        String tileType = getAttributeValue(t, "class");
+        if (tileType == null || tileType.isEmpty()) {
+            tileType = getAttributeValue(t, "type");
+        }
+        if (tileType != null && !tileType.isEmpty()) {
+            tile.setType(tileType);
+        }
+
         for (int i = 0; i < children.getLength(); i++) {
             Node child = children.item(i);
             if ("image".equalsIgnoreCase(child.getNodeName())) {
                 BufferedImage img = unmarshalImage(child, baseDir);
+                if (img != null) {
+                    final Integer cropX = getOptionalIntAttribute(t, "x");
+                    final Integer cropY = getOptionalIntAttribute(t, "y");
+                    final Integer cropWidth = getOptionalIntAttribute(t, "width");
+                    final Integer cropHeight = getOptionalIntAttribute(t, "height");
+                    if (cropX != null || cropY != null || cropWidth != null || cropHeight != null) {
+                        final int x = cropX != null ? cropX : 0;
+                        final int y = cropY != null ? cropY : 0;
+                        final int w = cropWidth != null ? cropWidth : img.getWidth() - x;
+                        final int h = cropHeight != null ? cropHeight : img.getHeight() - y;
+                        if (x >= 0 && y >= 0 && w > 0 && h > 0
+                                && x + w <= img.getWidth() && y + h <= img.getHeight()) {
+                            img = img.getSubimage(x, y, w, h);
+                        }
+                    }
+                }
                 tile.setImage(img);
             } else if ("animation".equalsIgnoreCase(child.getNodeName())) {
-                // TODO: fill this in once TMXMapWriter is complete
+                if (tile instanceof AnimatedTile) {
+                    Animation anim = tile.getAnimation();
+                    if (anim != null && anim.getFrame() != null && !anim.getFrame().isEmpty()) {
+                        java.util.List<Frame> frames = anim.getFrame();
+                        Tile[] frameTiles = new Tile[frames.size()];
+                        for (int j = 0; j < frames.size(); j++) {
+                            Frame f = frames.get(j);
+                            int tileId = f.getTileid();
+                            Tile frameTile = set.getTile(tileId);
+                            if (frameTile == null) {
+                                frameTile = new Tile();
+                            }
+                            frameTiles[j] = frameTile;
+                        }
+                        ((AnimatedTile) tile).setSprite(new Sprite(frameTiles));
+                    }
+                }
+            } else if ("objectgroup".equalsIgnoreCase(child.getNodeName())) {
+                ObjectGroup collisionGroup = unmarshalObjectGroup(child);
+                if (collisionGroup != null) {
+                    tile.setObjectGroup(collisionGroup);
+                }
             }
         }
 
@@ -552,6 +996,11 @@ public class TMXMapReader {
         final int locked = getAttribute(t, "locked", 0);
         if (locked != 0) {
             g.setLocked(1);
+        }
+
+        final String groupClass = getAttributeValue(t, "class");
+        if (groupClass != null) {
+            g.setClassName(groupClass);
         }
 
         g.getLayers().clear();
@@ -602,6 +1051,11 @@ public class TMXMapReader {
         final int locked = getAttribute(t, "locked", 0);
         if (locked != 0) {
             og.setLocked(1);
+        }
+
+        final String ogClass = getAttributeValue(t, "class");
+        if (ogClass != null) {
+            og.setClassName(ogClass);
         }
 
         // Manually parse the objects in object group
@@ -657,6 +1111,40 @@ public class TMXMapReader {
             ml.setOpacity(Float.parseFloat(opacity));
         }
 
+        final String tintColor = getAttributeValue(t, "tintcolor");
+        if (tintColor != null) {
+            ml.setTintcolor(tintColor);
+        }
+
+        final String offsetXStr = getAttributeValue(t, "offsetx");
+        if (offsetXStr != null && !offsetXStr.isEmpty()) {
+            ml.setOffsetX((int) Double.parseDouble(offsetXStr));
+        }
+        final String offsetYStr = getAttributeValue(t, "offsety");
+        if (offsetYStr != null && !offsetYStr.isEmpty()) {
+            ml.setOffsetY((int) Double.parseDouble(offsetYStr));
+        }
+
+        final double parallaxx = getDoubleAttribute(t, "parallaxx", 1.0);
+        if (parallaxx != 1.0) {
+            ml.setParallaxx(parallaxx);
+        }
+
+        final double parallaxy = getDoubleAttribute(t, "parallaxy", 1.0);
+        if (parallaxy != 1.0) {
+            ml.setParallaxy(parallaxy);
+        }
+
+        final String layerClass = getAttributeValue(t, "class");
+        if (layerClass != null) {
+            ml.setClassName(layerClass);
+        }
+
+        final String mode = getAttributeValue(t, "mode");
+        if (mode != null && !mode.isEmpty()) {
+            ml.setMode(mode);
+        }
+
         readProperties(t.getChildNodes(), ml.getProperties());
 
         for (Node child = t.getFirstChild(); child != null;
@@ -666,7 +1154,69 @@ public class TMXMapReader {
                 String encoding = getAttributeValue(child, "encoding");
                 String comp = getAttributeValue(child, "compression");
 
-                if ("base64".equalsIgnoreCase(encoding)) {
+                // Check for chunk children (infinite maps)
+                boolean hasChunks = false;
+                for (Node chunkCheck = child.getFirstChild(); chunkCheck != null;
+                     chunkCheck = chunkCheck.getNextSibling()) {
+                    if ("chunk".equalsIgnoreCase(chunkCheck.getNodeName())) {
+                        hasChunks = true;
+                        break;
+                    }
+                }
+
+                if (hasChunks) {
+                    // Infinite map: compute bounding box from all chunks
+                    int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE;
+                    int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE;
+                    for (Node chunkNode = child.getFirstChild(); chunkNode != null;
+                         chunkNode = chunkNode.getNextSibling()) {
+                        if ("chunk".equalsIgnoreCase(chunkNode.getNodeName())) {
+                            int cx = getAttribute(chunkNode, "x", 0);
+                            int cy = getAttribute(chunkNode, "y", 0);
+                            int cw = getAttribute(chunkNode, "width", 0);
+                            int ch = getAttribute(chunkNode, "height", 0);
+                            minX = Math.min(minX, cx);
+                            minY = Math.min(minY, cy);
+                            maxX = Math.max(maxX, cx + cw);
+                            maxY = Math.max(maxY, cy + ch);
+                        }
+                    }
+                    int totalWidth = maxX - minX;
+                    int totalHeight = maxY - minY;
+                    ml = new TileLayer(new java.awt.Rectangle(minX, minY, totalWidth, totalHeight));
+                    ml.setId(layerId);
+                    ml.setName(getAttributeValue(t, "name"));
+                    if (opacity != null) {
+                        ml.setOpacity(Float.parseFloat(opacity));
+                    }
+                    if (tintColor != null) {
+                        ml.setTintcolor(tintColor);
+                    }
+                    if (parallaxx != 1.0) {
+                        ml.setParallaxx(parallaxx);
+                    }
+                    if (parallaxy != 1.0) {
+                        ml.setParallaxy(parallaxy);
+                    }
+                    if (mode != null && !mode.isEmpty()) {
+                        ml.setMode(mode);
+                    }
+                    readProperties(t.getChildNodes(), ml.getProperties());
+
+                    // Read each chunk
+                    for (Node chunkNode = child.getFirstChild(); chunkNode != null;
+                         chunkNode = chunkNode.getNextSibling()) {
+                        if (!"chunk".equalsIgnoreCase(chunkNode.getNodeName())) {
+                            continue;
+                        }
+                        int cx = getAttribute(chunkNode, "x", 0);
+                        int cy = getAttribute(chunkNode, "y", 0);
+                        int cw = getAttribute(chunkNode, "width", 0);
+                        int ch = getAttribute(chunkNode, "height", 0);
+
+                        readChunkData(ml, chunkNode, encoding, comp, cx, cy, cw, ch);
+                    }
+                } else if ("base64".equalsIgnoreCase(encoding)) {
                     Node cdata = child.getFirstChild();
                     if (cdata != null) {
                         String enc = cdata.getNodeValue().trim();
@@ -679,6 +1229,8 @@ public class TMXMapReader {
                             is = new GZIPInputStream(bais, len);
                         } else if ("zlib".equalsIgnoreCase(comp)) {
                             is = new InflaterInputStream(bais);
+                        } else if ("zstd".equalsIgnoreCase(comp)) {
+                            is = new ZstdInputStream(bais);
                         } else if (comp != null && !comp.isEmpty()) {
                             throw new IOException("Unrecognized compression method \"" + comp + "\" for map layer " + ml.getName());
                         } else {
@@ -779,6 +1331,76 @@ public class TMXMapReader {
 
 
     /**
+     * Reads tile data from a chunk node and places tiles in the layer at the
+     * correct position.
+     */
+    private void readChunkData(TileLayer ml, Node chunkNode, String encoding,
+                               String comp, int cx, int cy, int cw, int ch) throws IOException {
+        if ("base64".equalsIgnoreCase(encoding)) {
+            Node cdata = chunkNode.getFirstChild();
+            if (cdata != null) {
+                String enc = cdata.getNodeValue().trim();
+                byte[] dec = Base64.getDecoder().decode(enc);
+                ByteArrayInputStream bais = new ByteArrayInputStream(dec);
+                InputStream is;
+
+                if ("gzip".equalsIgnoreCase(comp)) {
+                    is = new GZIPInputStream(bais, cw * ch * 4);
+                } else if ("zlib".equalsIgnoreCase(comp)) {
+                    is = new InflaterInputStream(bais);
+                } else if ("zstd".equalsIgnoreCase(comp)) {
+                    is = new ZstdInputStream(bais);
+                } else if (comp != null && !comp.isEmpty()) {
+                    throw new IOException("Unrecognized compression method \"" + comp + "\" for chunk");
+                } else {
+                    is = bais;
+                }
+
+                for (int y = 0; y < ch; y++) {
+                    for (int x = 0; x < cw; x++) {
+                        int tileId = 0;
+                        tileId |= is.read();
+                        tileId |= is.read() << Byte.SIZE;
+                        tileId |= is.read() << Byte.SIZE * 2;
+                        tileId |= is.read() << Byte.SIZE * 3;
+
+                        setTileAtFromTileId(ml, cy + y, cx + x, tileId);
+                    }
+                }
+            }
+        } else if ("csv".equalsIgnoreCase(encoding)) {
+            String csvText = chunkNode.getTextContent();
+            String[] csvTileIds = csvText.trim().split("[\\s]*,[\\s]*");
+
+            for (int y = 0; y < ch; y++) {
+                for (int x = 0; x < cw; x++) {
+                    String gid = csvTileIds[x + y * cw];
+                    long tileId = Long.parseLong(gid);
+                    setTileAtFromTileId(ml, cy + y, cx + x, (int) tileId);
+                }
+            }
+        } else {
+            int x = 0, y = 0;
+            for (Node dataChild = chunkNode.getFirstChild(); dataChild != null;
+                 dataChild = dataChild.getNextSibling()) {
+                if ("tile".equalsIgnoreCase(dataChild.getNodeName())) {
+                    int tileId = getAttribute(dataChild, "gid", -1);
+                    setTileAtFromTileId(ml, cy + y, cx + x, tileId);
+
+                    x++;
+                    if (x == cw) {
+                        x = 0;
+                        y++;
+                    }
+                    if (y == ch) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Helper method to set the tile based on its global id.
      *
      * @param ml tile layer
@@ -844,13 +1466,27 @@ public class TMXMapReader {
         // Load the layers and groups
         for (Node sibs = mapNode.getFirstChild(); sibs != null;
                 sibs = sibs.getNextSibling()) {
-            if ("group".equals(sibs.getNodeName())) {
+            if ("editorsettings".equals(sibs.getNodeName())) {
+                for (Node esChild = sibs.getFirstChild(); esChild != null;
+                     esChild = esChild.getNextSibling()) {
+                    if ("chunksize".equals(esChild.getNodeName())) {
+                        int cw = getAttribute(esChild, "width", 0);
+                        int ch = getAttribute(esChild, "height", 0);
+                        if (cw > 0) map.setEditorChunkWidth(cw);
+                        if (ch > 0) map.setEditorChunkHeight(ch);
+                    } else if ("export".equals(esChild.getNodeName())) {
+                        String target = getAttributeValue(esChild, "target");
+                        String format = getAttributeValue(esChild, "format");
+                        if (target != null) map.setExportTarget(target);
+                        if (format != null) map.setExportFormat(format);
+                    }
+                }
+            } else if ("group".equals(sibs.getNodeName())) {
                 Group group = unmarshalGroup(sibs);
                 if (group != null) {
                     map.addLayer(group);
                 }
-            }
-            if ("layer".equals(sibs.getNodeName())) {
+            } else if ("layer".equals(sibs.getNodeName())) {
                 TileLayer layer = readLayer(sibs);
                 if (layer != null) {
                     map.addLayer(layer);

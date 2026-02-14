@@ -31,6 +31,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.Rectangle;
 
 import javax.swing.JFrame;
@@ -38,6 +39,7 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.Scrollable;
 import javax.swing.SwingConstants;
+import javax.swing.Timer;
 import javax.swing.WindowConstants;
 
 import org.mapeditor.core.Map;
@@ -49,6 +51,7 @@ import org.mapeditor.view.HexagonalRenderer;
 import org.mapeditor.view.MapRenderer;
 import org.mapeditor.view.OrthogonalRenderer;
 import org.mapeditor.view.IsometricRenderer;
+import org.mapeditor.view.StaggeredRenderer;
 
 /**
  * An example showing how to use libtiled-java to do a simple TMX viewer.
@@ -114,6 +117,7 @@ class MapView extends JPanel implements Scrollable
 {
     private final Map map;
     private final MapRenderer renderer;
+    private final Timer animationTimer;
 
     public MapView(Map map) {
         this.map = map;
@@ -121,12 +125,17 @@ class MapView extends JPanel implements Scrollable
 
         setPreferredSize(renderer.getMapSize());
         setOpaque(true);
+
+        animationTimer = new Timer(33, e -> repaint());
+        animationTimer.start();
     }
 
     @Override
     public void paintComponent(Graphics g) {
         final Graphics2D g2d = (Graphics2D) g.create();
         final Rectangle clip = g2d.getClipBounds();
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
 
         // Draw a gray background
         g2d.setPaint(new Color(100, 100, 100));
@@ -134,12 +143,31 @@ class MapView extends JPanel implements Scrollable
 
         // Draw each map layer
         for (MapLayer layer : map.getLayers()) {
-            if (layer instanceof TileLayer) {
-                renderer.paintTileLayer(g2d, (TileLayer) layer);
-            } else if (layer instanceof ObjectGroup) {
-                renderer.paintObjectGroup(g2d, (ObjectGroup) layer);
+            final Graphics2D layerGraphics = (Graphics2D) g2d.create();
+            try {
+                applyParallaxTranslation(layerGraphics, layer);
+
+                if (layer instanceof TileLayer) {
+                    renderer.paintTileLayer(layerGraphics, (TileLayer) layer);
+                } else if (layer instanceof ObjectGroup) {
+                    renderer.paintObjectGroup(layerGraphics, (ObjectGroup) layer);
+                }
+            } finally {
+                layerGraphics.dispose();
             }
         }
+        g2d.dispose();
+    }
+
+    private void applyParallaxTranslation(Graphics2D g2d, MapLayer layer) {
+        final double parallaxOriginX = map.getParallaxoriginx() != null ? map.getParallaxoriginx() : 0.0;
+        final double parallaxOriginY = map.getParallaxoriginy() != null ? map.getParallaxoriginy() : 0.0;
+        final double parallaxX = layer.getParallaxx() != null ? layer.getParallaxx() : 1.0;
+        final double parallaxY = layer.getParallaxy() != null ? layer.getParallaxy() : 1.0;
+
+        final int translateX = (int) Math.round(parallaxOriginX * (1.0 - parallaxX));
+        final int translateY = (int) Math.round(parallaxOriginY * (1.0 - parallaxY));
+        g2d.translate(translateX, translateY);
     }
 
     private static MapRenderer createRenderer(Map map) {
@@ -149,6 +177,9 @@ class MapView extends JPanel implements Scrollable
 
             case ISOMETRIC:
                 return new IsometricRenderer(map);
+
+            case STAGGERED:
+                return new StaggeredRenderer(map);
 
             case HEXAGONAL:
                 return new HexagonalRenderer(map);

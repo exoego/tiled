@@ -83,7 +83,7 @@ import org.mapeditor.core.Polygon;
  *
  * @version 1.4.2
  */
-public class HexagonalRenderer implements MapRenderer {
+public class HexagonalRenderer extends AbstractRenderer {
 
     /** Constant <code>ALIGN_TOP=1</code> */
     public static final int ALIGN_TOP = 1;
@@ -151,81 +151,85 @@ public class HexagonalRenderer implements MapRenderer {
     /** {@inheritDoc} */
     @Override
     public void paintTileLayer(Graphics2D g, TileLayer layer) {
-        // Determine area to draw from clipping rectangle
-        Dimension tsize = getEffectiveMapTileSize();
+        paintLayer(g, layer, () -> {
+            // Determine area to draw from clipping rectangle
+            Dimension tsize = getEffectiveMapTileSize();
 
-        Rectangle clipRect = g.getClipBounds();
+            Rectangle clipRect = g.getClipBounds();
 
-        Point topLeft = screenToTileCoords(
-                layer, (int) clipRect.getMinX(), (int) clipRect.getMinY());
-        Point bottomRight = screenToTileCoords(
-                layer, (int) clipRect.getMaxX(), (int) clipRect.getMaxY());
-        int startX = (int) topLeft.getX();
-        int startY = (int) topLeft.getY();
-        int endX = (int) (bottomRight.getX());
-        int endY = (int) (bottomRight.getY());
-        if (startX < 0) {
-            startX = 0;
-        }
-        if (startY < 0) {
-            startY = 0;
-        }
-        if (endX >= map.getWidth()) {
-            endX = map.getWidth() - 1;
-        }
-        if (endY >= map.getHeight()) {
-            endY = map.getHeight() - 1;
-        }
+            Point topLeft = screenToTileCoords(
+                    layer, (int) clipRect.getMinX(), (int) clipRect.getMinY());
+            Point bottomRight = screenToTileCoords(
+                    layer, (int) clipRect.getMaxX(), (int) clipRect.getMaxY());
+            int startX = (int) topLeft.getX();
+            int startY = (int) topLeft.getY();
+            int endX = (int) (bottomRight.getX());
+            int endY = (int) (bottomRight.getY());
+            if (startX < 0) {
+                startX = 0;
+            }
+            if (startY < 0) {
+                startY = 0;
+            }
+            if (endX >= map.getWidth()) {
+                endX = map.getWidth() - 1;
+            }
+            if (endY >= map.getHeight()) {
+                endY = map.getHeight() - 1;
+            }
 
-        Polygon gridPoly;
-        double gx;
-        double gy;
-        for (int y = startY; y <= endY; y++) {
-            for (int x = startX; x <= endX; x++) {
-                Tile t = layer.getTileAt(x, y);
+            Polygon gridPoly;
+            double gx;
+            double gy;
+            for (int y = startY; y <= endY; y++) {
+                for (int x = startX; x <= endX; x++) {
+                    Tile t = layer.getTileAt(x, y);
 
-                if (t != null) {
-                    Point screenCoords = getTopLeftCornerOfTile(tsize, x, y);
-                    gx = screenCoords.getX();
-                    gy = screenCoords.getY();
-                    g.drawImage(t.getImage(), (int) gx, (int) gy, null);
+                    if (t != null) {
+                        Point screenCoords = getTopLeftCornerOfTile(tsize, x, y);
+                        gx = screenCoords.getX();
+                        gy = screenCoords.getY();
+                        g.drawImage(t.getImage(), (int) gx, (int) gy, null);
+                    }
                 }
             }
-        }
+        });
     }
 
     /** {@inheritDoc} */
     @Override
     public void paintObjectGroup(Graphics2D g, ObjectGroup group) {
-        // NOTE: Direct copy from OrthoMapView (candidate for generalization)
-        for (MapObject mo : group) {
-            double ox = mo.getX();
-            double oy = mo.getY();
+        paintLayer(g, group, () -> {
+            // NOTE: Direct copy from OrthoMapView (candidate for generalization)
+            for (MapObject mo : group) {
+                double ox = mo.getX();
+                double oy = mo.getY();
 
-            if (mo.getWidth() == 0 || mo.getHeight() == 0) {
-                g.setRenderingHint(
-                        RenderingHints.KEY_ANTIALIASING,
-                        RenderingHints.VALUE_ANTIALIAS_ON);
-                g.setColor(Color.black);
-                g.fillOval((int) ox + 1, (int) oy + 1,
-                        10, 10);
-                g.setColor(Color.orange);
-                g.fillOval((int) ox, (int) oy,
-                        10, 10);
-                g.setRenderingHint(
-                        RenderingHints.KEY_ANTIALIASING,
-                        RenderingHints.VALUE_ANTIALIAS_OFF);
-            } else {
-                g.setColor(Color.black);
-                g.drawRect((int) ox + 1, (int) oy + 1,
-                        mo.getWidth().intValue(),
-                        mo.getHeight().intValue());
-                g.setColor(Color.orange);
-                g.drawRect((int) ox, (int) oy,
-                        mo.getWidth().intValue(),
-                        mo.getHeight().intValue());
+                if (mo.getWidth() == 0 || mo.getHeight() == 0) {
+                    g.setRenderingHint(
+                            RenderingHints.KEY_ANTIALIASING,
+                            RenderingHints.VALUE_ANTIALIAS_ON);
+                    g.setColor(Color.black);
+                    g.fillOval((int) ox + 1, (int) oy + 1,
+                            10, 10);
+                    g.setColor(Color.orange);
+                    g.fillOval((int) ox, (int) oy,
+                            10, 10);
+                    g.setRenderingHint(
+                            RenderingHints.KEY_ANTIALIASING,
+                            RenderingHints.VALUE_ANTIALIAS_OFF);
+                } else {
+                    g.setColor(Color.black);
+                    g.drawRect((int) ox + 1, (int) oy + 1,
+                            mo.getWidth().intValue(),
+                            mo.getHeight().intValue());
+                    g.setColor(Color.orange);
+                    g.drawRect((int) ox, (int) oy,
+                            mo.getWidth().intValue(),
+                            mo.getHeight().intValue());
+                }
             }
-        }
+        });
     }
 
     /**
